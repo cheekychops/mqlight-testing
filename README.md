@@ -3,7 +3,7 @@
 Execute the following command to execute the NonBlockingClientPerformanceTestApp:
 
 ```
-mvn scala:exec -q
+mvn scala:run -q
 
 ```
 
