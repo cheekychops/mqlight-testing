@@ -29,6 +29,11 @@
 			<artifactId>scala-library</artifactId>
 			<version>${scala.version}</version>
 		</dependency>
+		<dependency>
+			<groupId>com.typesafe</groupId>
+			<artifactId>config</artifactId>
+			<version>1.2.1</version>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -41,7 +46,7 @@
 				<configuration>
 					<archive>
 						<manifest>
-							<mainClass>test.ibm.mqlight.perf.UOWRoundTrip.UOWMonitor</mainClass>
+							<mainClass>cheekychops.mqlight.NonBlockingClientPerformanceTestApp</mainClass>
 						</manifest>
 					</archive>
 					<descriptorRefs>

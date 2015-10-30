@@ -11,16 +11,23 @@ package cheekychops.mqlight
 import com.ibm.mqlight.api._
 import collection.mutable.Set
 import java.util.concurrent._
+import scala.collection.JavaConverters._
 
 object NonBlockingClientPerformanceTestApp extends App {
 
   val senderCount = 4
-  val messageCount = 800
-  val brokerUri = "amqp://admin:password@localhost:5672"
-  val brokerOptions = ClientOptions.builder().build()
+  val messageCount = 100
 
   val senders = new ConcurrentLinkedQueue[NonBlockingClient]()
   val topic = "/temp/topic"
+  val subscriberTTL = 0
+  val subscribeOptions = SubscribeOptions.builder.setTtl(subscriberTTL).build
+  val timeoutMins = 3
+  val sendOptions = SendOptions.builder().setTtl(timeoutMins * 60000L).build
+
+  println(s"using $senderCount clients to send $messageCount messages to $topic")
+  println(s"Message TTL = $timeoutMins minutes")
+  println(s"Subscriber TTL = $subscriberTTL ms")
 
   //Create the senders
   createClients(senderCount) foreach { client =>
@@ -28,9 +35,12 @@ object NonBlockingClientPerformanceTestApp extends App {
   }
 
   //Perform the test with varying numbers of clients
-  1 to 101 by 1 foreach { i =>
+  1 to 10 by 1 foreach { i =>
     performTest(i)
   }
+
+  //Stop the senders
+  stop(senders.asScala)
 
   def performTest(clientCount: Int) = {
     val started = System.currentTimeMillis
@@ -40,39 +50,41 @@ object NonBlockingClientPerformanceTestApp extends App {
     subscribe(receivers, destinationLatch)
     val subscribed = System.currentTimeMillis
     sendMessages()
-    destinationLatch.await(2, TimeUnit.MINUTES)
+    destinationLatch.await(timeoutMins, TimeUnit.MINUTES)
     if (destinationLatch.getCount > 0) println(s"TIMEOUT: Still had ${destinationLatch.getCount} messages to receive")
     val received = System.currentTimeMillis
     unsubscribe(receivers)
     val unsubscribed = System.currentTimeMillis
     stop(receivers)
     val stopped = System.currentTimeMillis
-    println(s"$clientCount clients took ${created - started} ms to create, ${subscribed - created} ms to subscribe, ${received - subscribed} ms to receive ${messageCount*clientCount} messages, ${unsubscribed - received} ms to unsubscribe, and ${stopped - unsubscribed} ms to stop")
+    val receivedCount = messageCount * clientCount - destinationLatch.getCount
+    val msPerMessage = (received - subscribed) / (receivedCount / clientCount)
+    println(s"$clientCount clients took ${created - started} ms to create, ${subscribed - created} ms to subscribe, ${received - subscribed} ms to receive $receivedCount messages ($msPerMessage ms/msg sent), ${unsubscribed - received} ms to unsubscribe, and ${stopped - unsubscribed} ms to stop")
   }
 
-  def createClients(count: Int): Set[NonBlockingClient] = {
+  def createClients(count: Int): Iterable[NonBlockingClient] = {
     val clients = Set.empty[NonBlockingClient]
     val latch = new CountDownLatch(count)
     1 to count foreach { _ =>
-      clients += NonBlockingClient.create(brokerUri, brokerOptions, new ClientListener(latch), null)
+      clients += NonBlockingClient.create(BrokerSettings.Uri.orNull, BrokerSettings.Options, new ClientListener(latch), null)
     }
     latch.await(2, TimeUnit.MINUTES)
     if (latch.getCount > 0) println(s"TIMEOUT: Still had ${latch.getCount} clients to create")
     clients
   }
 
-  def subscribe(clients: Set[NonBlockingClient], destinationLatch: CountDownLatch) = {
+  def subscribe(clients: Iterable[NonBlockingClient], destinationLatch: CountDownLatch) = {
     val subscriptionLatch = new CountDownLatch(clients.size)
     val destinationListener = new MyDestinationListener(destinationLatch)
     val subscriptionListener = new MyCompletionListener(subscriptionLatch)
     clients foreach { s =>
-      s.subscribe(topic, destinationListener, subscriptionListener, null)
+      s.subscribe(topic, subscribeOptions, destinationListener, subscriptionListener, null)
     }
     subscriptionLatch.await(2, TimeUnit.MINUTES)
     if (subscriptionLatch.getCount > 0) println(s"TIMEOUT: Still had ${subscriptionLatch.getCount} clients to subscribe")
   }
 
-  def unsubscribe(subscribers: Set[NonBlockingClient]) = {
+  def unsubscribe(subscribers: Iterable[NonBlockingClient]) = {
     val latch = new CountDownLatch(subscribers.size)
     val unsubscribeListener = new MyCompletionListener(latch)
 
@@ -83,7 +95,7 @@ object NonBlockingClientPerformanceTestApp extends App {
     if (latch.getCount > 0) println(s"TIMEOUT: Still had ${latch.getCount} clients to unsubscribe")
   }
 
-  def stop(subscribers: Set[NonBlockingClient]) = {
+  def stop(subscribers: Iterable[NonBlockingClient]) = {
     val latch = new CountDownLatch(subscribers.size)
     val stopListener = new MyCompletionListener(latch)
 
@@ -99,7 +111,7 @@ object NonBlockingClientPerformanceTestApp extends App {
     val task = new Runnable() {
       def run() = {
         val sender = senders.remove()
-        sender.send(topic, "A Message", null)
+        sender.send(topic, "A Message", null, sendOptions, null, null)
         senders.offer(sender)
       }
     }
